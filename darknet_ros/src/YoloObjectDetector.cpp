@@ -182,7 +182,7 @@ void YoloObjectDetector::cameraCallback(const sensor_msgs::ImageConstPtr& msg) {
   if (cam_image) {
     {
       boost::unique_lock<boost::shared_mutex> lockImageCallback(mutexImageCallback_);
-      imageHeader_ = msg->header;
+      imageHeader_ = cam_image->header;
       camImageCopy_ = cam_image->image.clone();
     }
     {
@@ -213,6 +213,7 @@ void YoloObjectDetector::checkForObjectsActionGoalCB() {
   if (cam_image) {
     {
       boost::unique_lock<boost::shared_mutex> lockImageCallback(mutexImageCallback_);
+      imageHeader_ = cam_image->header;
       camImageCopy_ = cam_image->image.clone();
     }
     {
@@ -243,7 +244,7 @@ bool YoloObjectDetector::publishDetectionImage(const cv::Mat& detectionImage) {
   cv_bridge::CvImage cvImage;
   cvImage.header.stamp = ros::Time::now();
   cvImage.header.frame_id = "detection_image";
-  cvImage.encoding = sensor_msgs::image_encodings::BGR8;
+  cvImage.encoding = sensor_msgs::image_encodings::RGB8;      //edited to RGB8 from BGR8 
   cvImage.image = detectionImage;
   detectionImagePublisher_.publish(*cvImage.toImageMsg());
   ROS_DEBUG("Detection image has been published.");
@@ -493,30 +494,65 @@ void YoloObjectDetector::yolo() {
 
   demoTime_ = what_time_is_it_now();
 
-  while (!demoDone_) {
-    buffIndex_ = (buffIndex_ + 1) % 3;
-    fetch_thread = std::thread(&YoloObjectDetector::fetchInThread, this);
-    detect_thread = std::thread(&YoloObjectDetector::detectInThread, this);
-    if (!demoPrefix_) {
-      fps_ = 1. / (what_time_is_it_now() - demoTime_);
-      demoTime_ = what_time_is_it_now();
-      if (viewImage_) {
-        displayInThread(0);
-      } else {
-        generate_image(buff_[(buffIndex_ + 1) % 3], disp_);
+  // keep track of what std_msgs::Header id this is (consecutively increasing)
+  std::uint32_t prevSeq_ = 0;
+  bool newImageForDetection = false;
+  bool hasDetectionsReady = false;
+  while (!demoDone_)
+  {
+      buffIndex_ = (buffIndex_ + 1) % 3;
+      // check this isn't an image already seen
+      newImageForDetection = (prevSeq_ != headerBuff_[(buffIndex_ + 2) % 3].seq);
+
+      fetch_thread = std::thread(&YoloObjectDetector::fetchInThread, this);
+      if (newImageForDetection)
+      {
+          // only detect if this is an image we haven't see before
+          detect_thread = std::thread(&YoloObjectDetector::detectInThread, this);
       }
-      publishInThread();
-    } else {
-      char name[256];
-      sprintf(name, "%s_%08d", demoPrefix_, count);
-      save_image(buff_[(buffIndex_ + 1) % 3], name);
-    }
-    fetch_thread.join();
-    detect_thread.join();
-    ++count;
-    if (!isNodeRunning()) {
-      demoDone_ = true;
-    }
+  
+        // only publish bounding boxes if detection has been done in the last iteration
+      if (hasDetectionsReady)
+      {
+          if (!demoPrefix_)
+          {
+              fps_ = 1. / (what_time_is_it_now() - demoTime_);
+              demoTime_ = what_time_is_it_now();
+              if (viewImage_)
+              {
+                  displayInThread(0);
+              }
+              else
+              {
+                  generate_image(buff_[(buffIndex_ + 1) % 3], disp_);
+              }
+              publishInThread();
+          }
+          else
+          {
+              char name[256];
+              sprintf(name, "%s_%08d", demoPrefix_, count);
+              save_image(buff_[(buffIndex_ + 1) % 3], name);
+              ++count;
+          }
+          // state that the image has been published
+          hasDetectionsReady = false;
+      }
+
+      fetch_thread.join();
+      if (newImageForDetection)
+      {
+          // increment the new sequence number to avoid detecting more than once
+          prevSeq_ = headerBuff_[(buffIndex_ + 2) % 3].seq;
+          // no detection made, so let thread execution complete so that it can be destroyed safely
+          detect_thread.join();
+          // only after the detect thread is joined, set this flag to true
+          hasDetectionsReady = true;
+      }
+      if (!isNodeRunning())
+      {
+          demoDone_ = true;
+      }
   }
 }
 
@@ -586,6 +622,10 @@ void* YoloObjectDetector::publishInThread() {
     boundingBoxesResults_.image_header = headerBuff_[(buffIndex_ + 1) % 3];
     boundingBoxesPublisher_.publish(boundingBoxesResults_);
   } else {
+    boundingBoxesResults_.header.stamp = ros::Time::now();
+    boundingBoxesResults_.header.frame_id = "detection";
+    boundingBoxesResults_.image_header = headerBuff_[(buffIndex_ + 1) % 3];
+    boundingBoxesPublisher_.publish(boundingBoxesResults_);
     darknet_ros_msgs::ObjectCount msg;
     msg.header.stamp = ros::Time::now();
     msg.header.frame_id = "detection";
