@@ -24,6 +24,7 @@ if __name__ == "__main__":
     sub_image = rospy.Subscriber(TOPIC_BOXES, BoundingBoxes, on_detect)
     #sub_object = rospy.Subscriber(TOPIC_BOXES, ObjectCount, on_img)
     pub_detect = rospy.Publisher(TOPIC_DETECT, Image, queue_size = 1000)
+    pub_detect_count = rospy.Publisher('detect_count', ObjectCount, queue_size = 1000)
     pub_detect_color = rospy.Publisher(TOPIC_DETECT_COLOR, Image, queue_size = 1000)
 
     rate = rospy.Rate(RATE)
@@ -36,16 +37,21 @@ if __name__ == "__main__":
             rospy.loginfo("Converting to mask")
             header = on_detect.last_image.image_header
             #t_begin = rospy.Time.now()
-            detect = detect_mask(on_detect.last_image.bounding_boxes,["car",'bus','truck','person'])
+            detect,counter = detect_mask(on_detect.last_image.bounding_boxes,["car",'bus','truck','person'])
             on_detect.last_image = None
             #t_end = rospy.Time.now()
             #rospy.loginfo(t_end - t_begin)
+            if pub_detect_count.get_num_connections() > 0:
+                m = ObjectCount()
+                m.count = counter
+                m.header.stamp.secs = header.stamp.secs
+                m.header.stamp.nsecs = header.stamp.nsecs
+                pub_detect_color.publish(m)
             if pub_detect.get_num_connections() > 0:
                 m = cv_bridge.cv2_to_imgmsg(detect.astype(np.uint8), encoding = 'mono8')
                 m.header.stamp.secs = header.stamp.secs
                 m.header.stamp.nsecs = header.stamp.nsecs
                 pub_detect.publish(m)
-
             if pub_detect_color.get_num_connections() > 0:
                 m = cv_bridge.cv2_to_imgmsg(mask_to_color(detect,color_map), encoding = 'rgb8')
                 m.header.stamp.secs = header.stamp.secs

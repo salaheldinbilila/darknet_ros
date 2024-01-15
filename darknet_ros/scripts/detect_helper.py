@@ -72,8 +72,10 @@ def detect_mask(boxes,classes=None):
         print("Invalid classes")
         return None
     '''
+    count = 0
     mask = np.zeros((1080,1440),dtype=np.uint8)         #TODO: add image info as ROS param
     for box in boxes:
         if box.Class in classes:
             mask[box.ymin:box.ymax+1,box.xmin:box.xmax+1] = class_map[box.Class]
-    return mask
+            count += 1
+    return mask,count
